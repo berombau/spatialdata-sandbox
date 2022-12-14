@@ -1,20 +1,7 @@
-# %%
-# setup:
-# 1) mamba
-#!pip install git+https://github.com/scverse/spatialdata@temp/spacehack2022
-#!pip install git+https://github.com/scverse/spatialdata-io
-#!pip install git+https://github.com/scverse/napari-spatialdata@spatialdata
 
-# %%
 import os
-import tifffile
-
-# to fix paths in Luca's machine:
-# os.chdir('scratch/userfolders/lucamarconato/liver')
-
-# geopandas hack
-os.environ["USE_PYGEOS"] = "0"
-import geopandas
+from pathlib import Path
+import logging
 
 import spatialdata as sd
 import numpy as np
@@ -22,10 +9,6 @@ import pyarrow as pa
 import dask_image.imread
 import shutil
 
-import os
-from pathlib import Path
-import logging
-from spatialdata._core.coordinate_system import CoordinateSystem
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +22,7 @@ output_path = Path(os.environ.get("OUTPUT_ROOT", data_path))
 # extract the data
 # os.makedirs("data", exist_ok=True)
 # os.system(f"tar -xvf {f}ResolveData_HCA.tar -C data")
+
 
 
 # %%
@@ -56,24 +40,28 @@ def create_points_element(path: str) -> pa.Table:
     xyz = table.to_pandas()[["x", "y", "z"]].to_numpy().astype(np.float32)
     gene = pa.Table.from_pydict({"gene": table.column("gene").dictionary_encode()})
 
+    image_translation = np.array([0, 0, 0], dtype=np.float32)
+    # TODO: not clear what position is z
+    # TODO: check resolution in z with dataset owners. x5-10 is a decent guess
+    # TODO: x and y is .138, but points and image are than not registered
+    # [resolution in x, resolution in y, resolution in z]
+    image_scale_factors = np.array([1, 1, 1], dtype=np.float32)
+    translation = sd.Translation(translation=image_translation)
+    scale = sd.Scale(scale=image_scale_factors)
+    composed = sd.Sequence([scale, translation])
+
+    # patch units in the coordinate system
+    # TODO: remove dummy patch
+    dummy = sd.PointsModel.parse(np.zeros(shape=(2,2)), transforms=composed)
+    correct_transform = sd.get_transform(dummy)
+    for axis in correct_transform.output_coordinate_system._axes:
+        axis.unit = "micrometer"
+    
+    # add points with a unit coordinate system
     t = sd.PointsModel.parse(
         coords=xyz,
         annotations=gene,
-        transforms=sd.Scale(
-                # xyz
-                scale=[1, 1, 1],
-                # output_coordinate_system=CoordinateSystem.from_dict(
-                #     {
-                #         "name": "micrometers",
-                #         "axes": [
-                #             {"name": "x", "type": "space", "unit": "micrometer"},
-                #             {"name": "y", "type": "space", "unit": "micrometer"},
-                #             {"name": "z", "type": "space", "unit": "micrometer"},
-                #         ]
-                #     }
-                # )
-            )
-        )
+        transforms=correct_transform)
     return t
 
 organisms = ["ResolveHuman", "ResolveMouse"]
@@ -88,23 +76,27 @@ for o in organisms:
         elif filename.endswith(".tiff"):
             im = dask_image.imread.imread(data_path / o / filename)
             name = filename.replace(".tiff", "")
-            element = sd.Image2DModel.parse(im, dims=("c", "y", "x"), multiscale_factors=[2, 4, 8, 16], name=name,
-                transform = sd.Scale(
-                    # cyx
-                    scale=[1, 1, 1],
-                    # TODO: get location for coordinate system `assert C not in _get_axes_names(mapper_input_coordinate_system)`
-                    # output_coordinate_system=CoordinateSystem.from_dict(
-                    #     {
-                    #         "name": "micrometers",
-                    #         "axes": [
-                    #             {"name": "c", "type": "space", "unit": "micrometer"},
-                    #             {"name": "y", "type": "space", "unit": "micrometer"},
-                    #             {"name": "x", "type": "space", "unit": "micrometer"},
-                    #         ]
-                    #     }
-                    # ),
-                )
+            # patch units in the coordinate system
+            image_translation = np.array([0, 0, 0], dtype=np.float32)
+            # [resolution in c, resolution in y, resolution in x]
+            image_scale_factors = np.array([1, 1, 1], dtype=np.float32)
+            translation = sd.Translation(translation=image_translation)
+            scale = sd.Scale(scale=image_scale_factors)
+            composed = sd.Sequence([scale, translation])
+            multiscale_factors = [2, 4, 8, 16]
+
+            # TODO: remove dummy patch
+            # TODO: correct transform is None, so skip the phyisical unit
+            dummy = sd.Image2DModel.parse(np.zeros(shape=(2, 2, 2)), dims=("c", "y", "x"), multiscale_factors=multiscale_factors, transform=composed)
+            # correct_transform = sd.get_transform(dummy)
+            # for axis in correct_transform.output_coordinate_system._axes:
+            #     axis.unit = "micrometer"
+            
+            # add element with a unit coordinate system
+            element = sd.Image2DModel.parse(im, dims=("c", "y", "x"), multiscale_factors=multiscale_factors, name=name,
+                transform = composed
             )
+            
             images[name] = element
             print(filename, f'converted to Image element ({type(element)})')
     sdata = sd.SpatialData(points=points, images=images)
@@ -117,13 +109,13 @@ for o in organisms:
 
 # %%
 # interactive visualization with napari (doesn't work in JupyterLab)
-from napari_spatialdata import Interactive
-sdata = sd.SpatialData.read(str(output_path / "ResolveHuman.zarr"))
-sdata
+# from napari_spatialdata import Interactive
+# sdata = sd.SpatialData.read(str(output_path / "ResolveHuman.zarr"))
+# sdata
 
-# %%
-sdata.images['20272_slide1_A1-1_DAPI']
+# # %%
+# sdata.images['20272_slide1_A1-1_DAPI']
 
-# %%
-Interactive(sdata)
+# # %%
+# Interactive(sdata)
 
