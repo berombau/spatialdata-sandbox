@@ -9,6 +9,8 @@ import pyarrow as pa
 import dask_image.imread
 import shutil
 
+from spatialdata._core.coordinate_system import CoordinateSystem
+from spatialdata._core.core_utils import get_default_coordinate_system
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,11 +20,6 @@ logging.basicConfig(level=logging.INFO)
 # check can find the data
 data_path = Path(os.environ.get("DATA_ROOT", "data/"))
 output_path = Path(os.environ.get("OUTPUT_ROOT", data_path))
-# %%
-# extract the data
-# os.makedirs("data", exist_ok=True)
-# os.system(f"tar -xvf {f}ResolveData_HCA.tar -C data")
-
 
 
 # %%
@@ -45,23 +42,41 @@ def create_points_element(path: str) -> pa.Table:
     # TODO: check resolution in z with dataset owners. x5-10 is a decent guess
     # TODO: x and y is .138, but points and image are than not registered
     # [resolution in x, resolution in y, resolution in z]
-    image_scale_factors = np.array([1, 1, 1], dtype=np.float32)
+    image_scale_factors = np.array([2, 2, 2], dtype=np.float32)
     translation = sd.Translation(translation=image_translation)
     scale = sd.Scale(scale=image_scale_factors)
-    composed = sd.Sequence([scale, translation])
+    xyz_cs = get_default_coordinate_system(('x', 'y', 'z')) 
+    composed: sd.Sequence = sd.Sequence([
+        scale, 
+        translation],
+        input_coordinate_system=xyz_cs,
+        output_coordinate_system=xyz_cs,
+    )
+    # output_coordinate_system=CoordinateSystem.from_dict(
+    #     {
+    #         "name": "micrometers",
+    #         "axes": [
+    #             {"name": "x", "type": "space", "unit": "micrometer"},
+    #             {"name": "y", "type": "space", "unit": "micrometer"},
+    #             {"name": "z", "type": "space", "unit": "micrometer"},
+    #         ]
+    #     }
+    # ),
 
     # patch units in the coordinate system
     # TODO: remove dummy patch
-    dummy = sd.PointsModel.parse(np.zeros(shape=(2,2)), transforms=composed)
-    correct_transform = sd.get_transform(dummy)
-    for axis in correct_transform.output_coordinate_system._axes:
-        axis.unit = "micrometer"
+    # TODO: suppport > 2 dims
+    # dummy = sd.PointsModel.parse(np.zeros(shape=(2, 2)), transforms=composed)
+    # correct_transform = sd.get_transform(dummy)
+    # for axis in correct_transform.output_coordinate_system._axes:
+    #     axis.unit = "micrometer"
     
     # add points with a unit coordinate system
     t = sd.PointsModel.parse(
         coords=xyz,
         annotations=gene,
-        transforms=correct_transform)
+        transforms=composed
+    )
     return t
 
 organisms = ["ResolveHuman", "ResolveMouse"]
@@ -79,22 +94,36 @@ for o in organisms:
             # patch units in the coordinate system
             image_translation = np.array([0, 0, 0], dtype=np.float32)
             # [resolution in c, resolution in y, resolution in x]
-            image_scale_factors = np.array([1, 1, 1], dtype=np.float32)
+            image_scale_factors = np.array([2, 2, 2], dtype=np.float32)
             translation = sd.Translation(translation=image_translation)
             scale = sd.Scale(scale=image_scale_factors)
-            composed = sd.Sequence([scale, translation])
+            composed = sd.Sequence([
+                scale, 
+                # TODO: support inversion of empty translation
+                translation,
+            ]
+            # , output_coordinate_system=CoordinateSystem.from_dict(
+            # {
+            #     "name": "micrometers",
+            #     "axes": [
+            #         {"name": "c", "type": "channel"},
+            #         {"name": "y", "type": "space", "unit": "micrometer"},
+            #         {"name": "x", "type": "space", "unit": "micrometer"},
+            #     ]
+            # })
+            )
             multiscale_factors = [2, 4, 8, 16]
 
             # TODO: remove dummy patch
-            # TODO: correct transform is None, so skip the phyisical unit
             dummy = sd.Image2DModel.parse(np.zeros(shape=(2, 2, 2)), dims=("c", "y", "x"), multiscale_factors=multiscale_factors, transform=composed)
-            # correct_transform = sd.get_transform(dummy)
-            # for axis in correct_transform.output_coordinate_system._axes:
-            #     axis.unit = "micrometer"
+            correct_transform = sd.get_transform(dummy)
+            for axis in correct_transform.output_coordinate_system._axes:
+                if axis.name != "c":
+                    axis.unit = "micrometer"
             
             # add element with a unit coordinate system
             element = sd.Image2DModel.parse(im, dims=("c", "y", "x"), multiscale_factors=multiscale_factors, name=name,
-                transform = composed
+                transform = correct_transform
             )
             
             images[name] = element
