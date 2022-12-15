@@ -37,18 +37,16 @@ def create_points_element(path: str) -> pa.Table:
     xyz = table.to_pandas()[["x", "y", "z"]].to_numpy().astype(np.float32)
     gene = pa.Table.from_pydict({"gene": table.column("gene").dictionary_encode()})
 
-    image_translation = np.array([0, 0, 0], dtype=np.float32)
-    # TODO: not clear what position is z
-    # TODO: check resolution in z with dataset owners. x5-10 is a decent guess
-    # TODO: x and y is .138, but points and image are than not registered
+    image_translation: ndarray[Any, dtype[floating[_32Bit]]] = np.array([0, 0, 0], dtype=np.float32)
     # [resolution in x, resolution in y, resolution in z]
-    image_scale_factors = np.array([2, 2, 2], dtype=np.float32)
+    image_scale_factors = np.array([.138, .138, .300], dtype=np.float32)
     translation = sd.Translation(translation=image_translation)
     scale = sd.Scale(scale=image_scale_factors)
     xyz_cs = get_default_coordinate_system(('x', 'y', 'z')) 
     composed: sd.Sequence = sd.Sequence([
         scale, 
         translation],
+        # TODO: remove redundant code
         input_coordinate_system=xyz_cs,
         output_coordinate_system=xyz_cs,
     )
@@ -75,8 +73,9 @@ def create_points_element(path: str) -> pa.Table:
     t = sd.PointsModel.parse(
         coords=xyz,
         annotations=gene,
-        transforms=composed
+        transform=composed
     )
+    # assert sd.get_transform(t).to_affine().affine[2, 3] == 2
     return t
 
 organisms = ["ResolveHuman", "ResolveMouse"]
@@ -94,12 +93,11 @@ for o in organisms:
             # patch units in the coordinate system
             image_translation = np.array([0, 0, 0], dtype=np.float32)
             # [resolution in c, resolution in y, resolution in x]
-            image_scale_factors = np.array([2, 2, 2], dtype=np.float32)
+            image_scale_factors = np.array([1, .138, .138], dtype=np.float32)
             translation = sd.Translation(translation=image_translation)
             scale = sd.Scale(scale=image_scale_factors)
             composed = sd.Sequence([
                 scale, 
-                # TODO: support inversion of empty translation
                 translation,
             ]
             # , output_coordinate_system=CoordinateSystem.from_dict(
